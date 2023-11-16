@@ -7,9 +7,8 @@ from app import app
 from app import billing as stripe
 from app import marketplace_subscriptions, marketplace_users
 from data import model
-from data.billing import RH_SKUS, get_plan
+from data.billing import RECONCILER_SKUS, get_plan
 from data.model import entitlements
-from util import marketplace
 from util.locking import GlobalLock, LockNotAcquiredException
 from workers.gunicorn_worker import GunicornWorker
 from workers.namespacegcworker import LOCK_TIMEOUT_PADDING
@@ -73,7 +72,7 @@ class ReconciliationWorker(Worker):
             except stripe.error.InvalidRequestError:
                 logger.warn("Invalid request for stripe_id %s", user.stripe_id)
                 continue
-            for sku_id in RH_SKUS:
+            for sku_id in RECONCILER_SKUS:
                 if stripe_customer.subscription:
                     plan = get_plan(stripe_customer.subscription.plan.id)
                     if plan is None:
