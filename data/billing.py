@@ -1,5 +1,6 @@
 import random
 import string
+import sys
 from calendar import timegm
 from datetime import datetime, timedelta
 from typing import Any, Dict
@@ -355,10 +356,18 @@ PLANS = [
         "plans_page_hidden": False,
     },
     {
-        "title": "subscriptionwatch",
+        "title": "premium",
         "privateRepos": 100,
         "stripeId": "not_a_stripe_plan",
-        "rh_sku": "MW74656",
+        "rh_sku": "MW02701",
+        "plans_page_hidden": True,
+        "billing_enabled": True,
+    },
+    {
+        "title": "selfsupport",
+        "privateRepos": sys.maxsize,
+        "stripeId": "not_a_stripe_plan",
+        "rh_sku": "MW02702",
         "plans_page_hidden": True,
         "billing_enabled": True,
     },

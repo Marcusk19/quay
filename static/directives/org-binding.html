@@ -22,12 +22,6 @@
         </select>
         <input class="form-control" type="number" min="1" max="{{subscriptions.length}}" ng-model="numSubscriptions" placeholder="Number of subscriptions">
         <a class="btn btn-primary" ng-click="bindSku(subscriptionBinding, numSubscriptions)">Attach subscriptions</a>
-        <div class="co-alert co-alert-success" ng-show="bindOrgSuccess">
-          Successfully bound subscription to org
-        </div>
-        <div class="co-alert co-alert-success" ng-show="removeSkuSuccess">
-          Successfully removed subscription from org
-        </div>
       </td>
       <td style="padding: 10px">
         <select class="form-control" ng-model="subscriptionRemovals">
@@ -46,6 +40,14 @@
           Remove subscriptions
         </a>
       </td>
+    </tr>
+      <div class="co-alert co-alert-success" ng-show="bindOrgSuccess">
+        Successfully bound subscription to org
+      </div>
+      <div class="co-alert co-alert-success" ng-show="removeSkuSuccess">
+        Successfully removed subscription from org
+      </div>
+    <tr>
     </tr>
   </table>
 </div>

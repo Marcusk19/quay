@@ -315,7 +315,7 @@ class FakeSubscriptionApi(RedHatSubscriptionApi):
         self.subscription_created = False
 
     def lookup_subscription(self, customer_id, sku_id):
-        if customer_id == TEST_USER["account_number"] and sku_id == "MW74656":
+        if customer_id == TEST_USER["account_number"] and sku_id == "MW02701":
             return TEST_USER["subscriptions"]
         return None
 
@@ -328,7 +328,7 @@ class FakeSubscriptionApi(RedHatSubscriptionApi):
     def get_subscription_sku(self, subscription_id):
         valid_ids = [subscription["id"] for subscription in TEST_USER["subscriptions"]]
         if subscription_id in valid_ids:
-            return "MW74656"
+            return "MW02701"
         else:
             return None
 
