@@ -47,21 +47,32 @@ class ReconciliationWorker(Worker):
         for user in stripe_users:
 
             email = user.email
-            ebsAccountNumber = entitlements.get_ebs_account_number(user.id)
+            model_customer_id = entitlements.get_web_customer_id(user.id)
             logger.debug(
-                "Database returned %s account number for %s", str(ebsAccountNumber), user.username
+                "Database returned %s customer id for %s", str(model_customer_id), user.username
             )
 
-            # go to user api if no ebsAccountNumber is found
-            if ebsAccountNumber is None:
-                logger.debug("Looking up ebsAccountNumber for email %s", email)
-                ebsAccountNumber = user_api.lookup_customer_id(email)
-                logger.debug("Found %s number for %s", str(ebsAccountNumber), user.username)
-                if ebsAccountNumber:
-                    entitlements.save_ebs_account_number(user, ebsAccountNumber)
-                else:
-                    logger.debug("User %s does not have an account number", user.username)
-                    continue
+            # check against user api
+            logger.debug("Looking up webCustomerId for email %s", email)
+            customer_id = user_api.lookup_customer_id(email)
+            logger.debug("Found %s number for %s", str(customer_id), user.username)
+
+            if model_customer_id is None and customer_id:
+                logger.debug("Saving new customer id %s for %s", customer_id, user.username)
+                entitlements.save_web_customer_id(user, customer_id)
+            elif model_customer_id != customer_id:
+                # what is in the database differs from the service
+                # take the service and store in the database instead
+                logger.debug(
+                    "Reconciled differing ids for %s, changing from %s to %s",
+                    user.username,
+                    model_customer_id,
+                    customer_id,
+                )
+                entitlements.update_web_customer_id(user, customer_id)
+            elif customer_id is None:
+                logger.debug("User %s does not have an account number", user.username)
+                continue
 
             # check if we need to create a subscription for customer in RH marketplace
             try:
@@ -78,9 +89,13 @@ class ReconciliationWorker(Worker):
                     if plan is None:
                         continue
                     if plan.get("rh_sku") == sku_id:
-                        subscription = marketplace_api.lookup_subscription(ebsAccountNumber, sku_id)
+                        subscription = marketplace_api.lookup_subscription(customer_id, sku_id)
                         if subscription is None:
-                            marketplace_api.create_entitlement(ebsAccountNumber, sku_id)
+                            logger.debug("Found %s to create for %s", sku_id, user.username)
+                            marketplace_api.create_entitlement(customer_id, sku_id)
+                        break
+            else:
+                logger.debug("User %s does not have a stripe subscription", user.username)
 
             logger.debug("Finished work for user %s", user.username)
 

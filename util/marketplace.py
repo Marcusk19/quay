@@ -22,12 +22,12 @@ class RedHatUserApi(object):
 
     def get_account_number(self, user):
         email = user.email
-        account_number = entitlements.get_ebs_account_number(user.id)
+        account_number = entitlements.get_web_customer_id(user.id)
         if account_number is None:
             account_number = self.lookup_customer_id(email)
             if account_number:
                 # store in database for next lookup
-                entitlements.save_ebs_account_number(user, account_number)
+                entitlements.save_web_customer_id(user, account_number)
         return account_number
 
     def lookup_customer_id(self, email):
@@ -70,10 +70,8 @@ class RedHatUserApi(object):
             return None
         for account in info:
             if account["accountRelationships"][0]["account"]["type"] == "person":
-                account_number = account["accountRelationships"][0]["account"].get(
-                    "ebsAccountNumber"
-                )
-                return account_number
+                customer_id = account["accountRelationships"][0]["account"].get("id")
+                return customer_id
         return None
 
 
@@ -84,15 +82,15 @@ class RedHatSubscriptionApi(object):
             "ENTITLEMENT_RECONCILIATION_MARKETPLACE_ENDPOINT"
         )
 
-    def lookup_subscription(self, ebsAccountNumber, skuId):
+    def lookup_subscription(self, webCustomerId, skuId):
         """
         Use internal marketplace API to find subscription for customerId and sku
         """
         logger.debug(
-            "looking up subscription sku %s for account %s", str(skuId), str(ebsAccountNumber)
+            "looking up subscription sku %s for account %s", str(skuId), str(webCustomerId)
         )
 
-        subscriptions_url = f"{self.marketplace_endpoint}/subscription/v5/search/criteria;sku={skuId};web_customer_id={ebsAccountNumber}"
+        subscriptions_url = f"{self.marketplace_endpoint}/subscription/v5/search/criteria;sku={skuId};web_customer_id={webCustomerId}"
         request_headers = {"Content-Type": "application/json"}
 
         # Using CustomerID to get active subscription for user

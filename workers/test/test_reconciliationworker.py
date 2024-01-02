@@ -39,5 +39,18 @@ def test_create_for_stripe_user(initialized_db):
     with patch.object(marketplace_subscriptions, "create_entitlement") as mock:
         worker._perform_reconciliation(marketplace_users, marketplace_subscriptions)
 
-    # expect that entitlment is created with account number
-    mock.assert_called_with(11111, "FakeSKU")
+    # expect that entitlment is created with customer id number
+    mock.assert_called_with(model.entitlements.get_web_customer_id(test_user.id), "FakeSKU")
+
+
+def test_reconcile_different_ids(initialized_db):
+    test_user = model.user.create_user("stripe_user", "password", "stripe_user@test.com")
+    test_user.stripe_id = "cus_" + "".join(random.choices(string.ascii_lowercase, k=14))
+    test_user.save()
+    model.entitlements.save_web_customer_id(test_user, 12345)
+
+    worker._perform_reconciliation(marketplace_users, marketplace_subscriptions)
+
+    new_id = model.entitlements.get_web_customer_id(test_user.id)
+    assert new_id != 12345
+    assert new_id == marketplace_users.lookup_customer_id(test_user.email)
