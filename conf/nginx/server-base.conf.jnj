@@ -276,7 +276,7 @@ location = /v2/auth {
 
     {% if enable_rate_limits %}
     # Use namespace-based rate limiting extracted from scope query parameter
-    limit_req zone=namespace_auth burst=2 nodelay;
+    limit_req zone=namespace_auth burst=10 nodelay;
     {% endif %}
 
     keepalive_timeout 0; # Disables HTTP 1.1 keep-alive and forces round-robin.
