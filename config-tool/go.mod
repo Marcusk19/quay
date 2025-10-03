@@ -1,6 +1,8 @@
 module github.com/quay/quay/config-tool
 
-go 1.21
+go 1.24.0
+
+toolchain go1.24.6
 
 require (
 	cuelang.org/go v0.6.0
@@ -27,13 +29,13 @@ require (
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.2
 	golang.org/x/crypto v0.28.0
-	golang.org/x/oauth2 v0.21.0
+	golang.org/x/oauth2 v0.28.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
-	github.com/coreos/go-oidc/v3 v3.11.0
-	github.com/go-jose/go-jose/v4 v4.0.2 // indirect
+	github.com/coreos/go-oidc/v3 v3.16.0
+	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 )
 
 require (
