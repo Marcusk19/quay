@@ -36,7 +36,7 @@
     "package.json": "^2.0.1",
     "process": "^0.11.10",
     "raven-js": "^3.1.0",
-    "rxjs": "5.5.7",
+    "rxjs": "5.5.12",
     "showdown": "^1.6.4",
     "url-parse": "^1.5.9"
   },
