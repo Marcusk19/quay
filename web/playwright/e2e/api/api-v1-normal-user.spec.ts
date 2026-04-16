@@ -12,6 +12,8 @@
  */
 
 import {test, expect, uniqueName} from '../../fixtures';
+import {pushImage} from '../../utils/container';
+import {TEST_USERS} from '../../global-setup';
 
 // ---------------------------------------------------------------------------
 // Organization CRUD
@@ -1468,6 +1470,363 @@ test.describe(
       expect(tagR.status()).toBe(200);
       const body = await tagR.json();
       expect(Array.isArray(body.tags ?? [])).toBe(true);
+    });
+
+    test('can list tags on own repo with pushed image', async ({
+      userClient,
+      api,
+    }) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'latest',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      const r = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/`,
+      );
+      expect(r.status()).toBe(200);
+      const body = await r.json();
+      expect(body.tags.length).toBeGreaterThan(0);
+      const tagNames = body.tags.map((t: {name: string}) => t.name);
+      expect(tagNames).toContain('latest');
+    });
+
+    test('can delete tag on own repo', async ({userClient, api}) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'deltag',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      const r = await userClient.delete(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/deltag`,
+      );
+      expect(r.status()).toBe(204);
+    });
+
+    test('can create (add) a tag on own repo', async ({userClient, api}) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'latest',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      // Get manifest digest
+      const tagResp = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}?includeTags=true`,
+      );
+      expect(tagResp.status()).toBe(200);
+      const tagBody = await tagResp.json();
+      const tags = tagBody.tags ?? {};
+      const firstTag = Object.values(tags)[0] as {manifest_digest: string};
+      const manifestDigest = firstTag.manifest_digest;
+      expect(manifestDigest).toBeTruthy();
+
+      // Create a new tag pointing to the same manifest
+      const r = await userClient.put(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/newtag`,
+        {manifest_digest: manifestDigest},
+      );
+      expect(r.status()).toBe(201);
+    });
+
+    test('can restore a deleted tag on own repo', async ({
+      userClient,
+      api,
+    }) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'restoretag',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      // Get manifest digest
+      const tagResp = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}?includeTags=true`,
+      );
+      expect(tagResp.status()).toBe(200);
+      const tagBody = await tagResp.json();
+      const tags = tagBody.tags ?? {};
+      const restoreTag = Object.values(tags).find(
+        (t: unknown) => (t as {name: string}).name === 'restoretag',
+      ) as {manifest_digest: string} | undefined;
+      const manifestDigest = restoreTag?.manifest_digest;
+      expect(manifestDigest).toBeTruthy();
+
+      // Delete the tag
+      const del = await userClient.delete(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/restoretag`,
+      );
+      expect(del.status()).toBe(204);
+
+      // Restore by re-creating tag with same digest
+      const restore = await userClient.put(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/restoretag`,
+        {manifest_digest: manifestDigest},
+      );
+      expect(restore.status()).toBe(201);
+
+      // Verify the tag is back
+      const verify = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/`,
+      );
+      expect(verify.status()).toBe(200);
+      const verifyBody = await verify.json();
+      const tagNames = verifyBody.tags.map((t: {name: string}) => t.name);
+      expect(tagNames).toContain('restoretag');
+    });
+
+    test('can permanently delete (expire) a tag on own repo', async ({
+      userClient,
+      api,
+    }) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'expiretag',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      // Get manifest digest
+      const tagResp = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}?includeTags=true`,
+      );
+      expect(tagResp.status()).toBe(200);
+      const tagBody = await tagResp.json();
+      const tags = tagBody.tags ?? {};
+      const expireTag = Object.values(tags).find(
+        (t: unknown) => (t as {name: string}).name === 'expiretag',
+      ) as {manifest_digest: string} | undefined;
+      const manifestDigest = expireTag?.manifest_digest;
+      expect(manifestDigest).toBeTruthy();
+
+      // Expire the tag
+      const r = await userClient.post(
+        `/api/v1/repository/${org.name}/${repo.name}/tag/expiretag/expire`,
+        {
+          manifest_digest: manifestDigest,
+          include_submanifests: true,
+          is_alive: true,
+        },
+      );
+      expect(r.status()).toBe(200);
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Manifests
+// ---------------------------------------------------------------------------
+
+test.describe(
+  'Normal User - Manifests',
+  {tag: ['@api', '@auth:Database', '@container']},
+  () => {
+    test('can get manifest digest on own repo', async ({userClient, api}) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'latest',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      // Get manifest digest
+      const tagResp = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}?includeTags=true`,
+      );
+      expect(tagResp.status()).toBe(200);
+      const tagBody = await tagResp.json();
+      const tags = tagBody.tags ?? {};
+      const firstTag = Object.values(tags)[0] as {manifest_digest: string};
+      const manifestDigest = firstTag.manifest_digest;
+      expect(manifestDigest).toBeTruthy();
+
+      // Get manifest by digest
+      const r = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}`,
+      );
+      expect(r.status()).toBe(200);
+      const body = await r.json();
+      expect(body.digest).toBe(manifestDigest);
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Manifest Labels
+// ---------------------------------------------------------------------------
+
+test.describe(
+  'Normal User - Manifest Labels',
+  {tag: ['@api', '@auth:Database', '@container']},
+  () => {
+    test('can add, list, get, and delete labels on own manifest', async ({
+      userClient,
+      api,
+    }) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'latest',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      // Get manifest digest
+      const tagResp = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}?includeTags=true`,
+      );
+      expect(tagResp.status()).toBe(200);
+      const tagBody = await tagResp.json();
+      const tags = tagBody.tags ?? {};
+      const firstTag = Object.values(tags)[0] as {manifest_digest: string};
+      const manifestDigest = firstTag.manifest_digest;
+      expect(manifestDigest).toBeTruthy();
+
+      // Add label
+      const add = await userClient.post(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/labels`,
+        {media_type: 'text/plain', key: 'env', value: 'prod'},
+      );
+      expect(add.status()).toBe(201);
+      const addBody = await add.json();
+      const labelId = addBody.label.id;
+      expect(labelId).toBeTruthy();
+
+      // List labels
+      const list = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/labels`,
+      );
+      expect(list.status()).toBe(200);
+      const listBody = await list.json();
+      const found = listBody.labels.find(
+        (l: {id: string}) => l.id === labelId,
+      );
+      expect(found).toBeTruthy();
+
+      // Get specific label
+      const get = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/labels/${labelId}`,
+      );
+      expect(get.status()).toBe(200);
+      const getBody = await get.json();
+      expect(getBody.key).toBe('env');
+      expect(getBody.value).toBe('prod');
+      expect(getBody.id).toBe(labelId);
+
+      // Delete label
+      const del = await userClient.delete(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/labels/${labelId}`,
+      );
+      expect(del.status()).toBe(204);
+
+      // Verify deleted
+      const verifyList = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/labels`,
+      );
+      expect(verifyList.status()).toBe(200);
+      const verifyBody = await verifyList.json();
+      const deleted = verifyBody.labels.find(
+        (l: {id: string}) => l.id === labelId,
+      );
+      expect(deleted).toBeUndefined();
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Vulnerability Scanning
+// ---------------------------------------------------------------------------
+
+test.describe(
+  'Normal User - Vulnerability Scanning',
+  {tag: ['@api', '@auth:Database', '@container', '@feature:SECURITY_SCANNER']},
+  () => {
+    test('can get security scan status for own manifest', async ({
+      userClient,
+      api,
+    }) => {
+      const org = await api.organization('usr_org');
+      const repo = await api.repository(org.name, 'usr_repo', 'public');
+
+      await pushImage(
+        org.name,
+        repo.name,
+        'latest',
+        TEST_USERS.user.username,
+        TEST_USERS.user.password,
+      );
+
+      // Get manifest digest
+      const tagResp = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}?includeTags=true`,
+      );
+      expect(tagResp.status()).toBe(200);
+      const tagBody = await tagResp.json();
+      const tags = tagBody.tags ?? {};
+      const firstTag = Object.values(tags)[0] as {manifest_digest: string};
+      const manifestDigest = firstTag.manifest_digest;
+      expect(manifestDigest).toBeTruthy();
+
+      // Poll until scan completes (status is no longer 'queued')
+      await expect
+        .poll(
+          async () => {
+            const r = await userClient.get(
+              `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/security?vulnerabilities=true`,
+            );
+            if (r.status() !== 200) return 'error';
+            const body = await r.json();
+            return body.status;
+          },
+          {
+            message: 'waiting for security scan to complete',
+            timeout: 120_000,
+            intervals: [3000, 5000, 10000],
+          },
+        )
+        .not.toBe('queued');
+
+      // Fetch final results
+      const r = await userClient.get(
+        `/api/v1/repository/${org.name}/${repo.name}/manifest/${manifestDigest}/security?vulnerabilities=true`,
+      );
+      expect(r.status()).toBe(200);
+      const body = await r.json();
+      expect(['scanned', 'unsupported']).toContain(body.status);
+      expect(body.data).toBeDefined();
     });
   },
 );
