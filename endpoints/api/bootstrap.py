@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import UTC, datetime
 from urllib.parse import urlparse
@@ -17,6 +16,7 @@ from data.database import OAuthAccessToken
 from data.model import db_transaction
 from data.model.oauth import (
     create_bootstrap_oauth_api_token,
+    create_workload_identity_oauth_token,
     delete_bootstrap_tokens,
     lock_bootstrap_token_operation,
     validate_bootstrap_token,
@@ -180,16 +180,14 @@ def _exchange_bootstrap_token():
             model.oauth.get_bootstrap_app_name(), owner
         )
     expiration_seconds = _exchange_expiration_seconds()
-    record, token = create_bootstrap_oauth_api_token(
+    _, token = create_workload_identity_oauth_token(
         application,
         owner,
         effective_scope,
+        issuer,
+        subject,
         expiration_seconds=expiration_seconds,
     )
-    data = json.loads(record.data)
-    data["subject"] = subject
-    record.data = json.dumps(data)
-    record.save()
     return _exchange_response(
         {
             "access_token": token,
