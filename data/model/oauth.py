@@ -625,11 +625,22 @@ def get_bootstrap_application_candidates(
     bootstrap_application_name = get_bootstrap_app_name()
     applications = lookup_applications_by_name(owner, bootstrap_application_name)
 
+    application_by_id = {application.id: application for application in applications}
+    token_bearing_application_ids = set()
+    if application_by_id:
+        tokens = OAuthAccessToken.select().where(
+            OAuthAccessToken.application << list(application_by_id),
+            OAuthAccessToken.authorized_user == owner,
+        )
+        for token in tokens:
+            application = application_by_id[token.application_id]
+            if is_bootstrap_oauth_token(token, user_obj=owner, application=application):
+                token_bearing_application_ids.add(application.id)
+
     canonical_application: OAuthApplication | None = None
     duplicate_applications: list[OAuthApplication] = []
     for application in applications:
-        bootstrap_tokens = get_bootstrap_tokens(application, authorized_user=owner)
-        if not bootstrap_tokens:
+        if application.id not in token_bearing_application_ids:
             continue
 
         if canonical_application is None:

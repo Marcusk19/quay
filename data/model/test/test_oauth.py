@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from playhouse.test_utils import assert_query_count
 
 from auth.scopes import READ_REPO
 from data import model
@@ -44,6 +45,22 @@ def create_access_token_for_last_accessed_test(application_name, expires_at):
     )
     token.expires_at = expires_at
     return token, access_token
+
+
+def test_bootstrap_application_candidates_batch_token_lookup(initialized_db):
+    owner = model.user.get_user("devtable")
+    name = model.oauth.get_bootstrap_app_name()
+    duplicate = model.oauth.create_bootstrap_application(name, owner)
+    model.oauth.create_bootstrap_oauth_api_token(duplicate, owner, "repo:read")
+    model.oauth.create_bootstrap_application(name, owner)
+    canonical = model.oauth.create_bootstrap_application(name, owner)
+    model.oauth.create_bootstrap_oauth_api_token(canonical, owner, "repo:write")
+
+    with assert_query_count(2):
+        found_canonical, found_duplicates = model.oauth.get_bootstrap_application_candidates(owner)
+
+    assert found_canonical == canonical
+    assert found_duplicates == [duplicate]
 
 
 def test_oauth_access_token_metadata_fields_are_nullable():
