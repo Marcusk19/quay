@@ -21,7 +21,7 @@ from data.model.oauth import (
     lock_bootstrap_token_operation,
     validate_bootstrap_token,
 )
-from endpoints.api import ApiResource, nickname, resource, show_if
+from endpoints.api import ApiResource, log_action, nickname, resource, show_if
 from endpoints.decorators import anon_allowed
 from endpoints.exception import (
     ApiErrorType,
@@ -93,6 +93,10 @@ def _exchange_expiration_seconds():
 class WorkloadScopeAuthorizationError(Exception):
     """Raised when a ServiceAccount is not authorized for its requested scope."""
 
+    def __init__(self, message, reason):
+        super().__init__(message)
+        self.reason = reason
+
 
 def authorize_workload_scope(authorized_subjects, issuer, subject, requested_scope):
     """Return the effective scope authorized for an exact issuer and subject."""
@@ -107,14 +111,17 @@ def authorize_workload_scope(authorized_subjects, issuer, subject, requested_sco
         None,
     )
     if mapping is None:
-        raise WorkloadScopeAuthorizationError("Kubernetes ServiceAccount is not authorized")
+        raise WorkloadScopeAuthorizationError(
+            "Kubernetes ServiceAccount is not authorized", "subject_not_authorized"
+        )
 
     allowed_scope = mapping.get("SCOPES", "")
     allowed = set(allowed_scope.split())
     requested = set(requested_scope.split()) if requested_scope else allowed
     if not allowed or not requested or not requested.issubset(allowed):
         raise WorkloadScopeAuthorizationError(
-            "requested scope is not authorized for the Kubernetes ServiceAccount"
+            "requested scope is not authorized for the Kubernetes ServiceAccount",
+            "scope_not_authorized",
         )
 
     return " ".join(sorted(requested))
@@ -143,22 +150,77 @@ def _is_local_bootstrap_renewal_request(req: Request) -> bool:
     )
 
 
+def _log_workload_identity_exchange(
+    *,
+    owner,
+    outcome,
+    requested_scope,
+    effective_scope=None,
+    issuer=None,
+    subject=None,
+    token_record=None,
+    client_id=None,
+    failure_category=None,
+    failure_reason=None,
+):
+    """Write an allow-listed audit record for one workload identity exchange."""
+    metadata = {"outcome": outcome, "requested_scope": requested_scope}
+    if issuer is not None and subject is not None:
+        metadata.update({"issuer": issuer, "subject": subject})
+    if effective_scope is not None:
+        metadata["effective_scope"] = effective_scope
+    if token_record is not None:
+        metadata["oauth_token_uuid"] = token_record.uuid
+    if client_id is not None:
+        metadata["client_id"] = client_id
+    if outcome == "failure":
+        metadata.update({"failure_category": failure_category, "failure_reason": failure_reason})
+
+    kind = (
+        "workload_identity_token_exchange"
+        if outcome == "success"
+        else "workload_identity_token_exchange_failed"
+    )
+    log_action(kind, owner.username if owner is not None else None, metadata=metadata)
+
+
 def _exchange_bootstrap_token():
     """Validate an exchange request and mint its bounded bootstrap token."""
     values = request.form
+    owner = model.user.get_user(app.config.get("BOOTSTRAP_TOKEN_OWNER"))
+    requested_scope_value = values.get("scope")
+    requested_scope = " ".join(sorted(set((requested_scope_value or "").split())))
     required = ("grant_type", "subject_token", "subject_token_type")
     if (
         any(not values.get(key) for key in required)
         or values.get("grant_type") != "urn:ietf:params:oauth:grant-type:token-exchange"
         or values.get("subject_token_type") != "urn:ietf:params:oauth:token-type:jwt"
     ):
+        _log_workload_identity_exchange(
+            owner=owner,
+            outcome="failure",
+            requested_scope=requested_scope,
+            failure_category="request",
+            failure_reason="invalid_request",
+        )
         _exchange_error("invalid_request", "invalid token exchange request", 400)
     raw = values["subject_token"]
     try:
         validated = KubernetesSATokenValidator(
             _exchange_config(), app.config["HTTPCLIENT"], model_cache
         ).validate(raw)
-    except KubernetesSATokenValidationError:
+    except KubernetesSATokenValidationError as exc:
+        _log_workload_identity_exchange(
+            owner=owner,
+            outcome="failure",
+            requested_scope=requested_scope,
+            failure_category=("identity" if exc.category == "identity" else "trust"),
+            failure_reason=(
+                "service_account_identity_invalid"
+                if exc.category == "identity"
+                else "token_validation_failed"
+            ),
+        )
         _exchange_error("invalid_token", "Kubernetes ServiceAccount token failed validation", 401)
     issuer = validated.issuer
     subject = validated.subject
@@ -167,26 +229,80 @@ def _exchange_bootstrap_token():
             _exchange_config().get("AUTHORIZED_SUBJECTS", []),
             issuer,
             subject,
-            values.get("scope", ""),
+            requested_scope,
         )
     except WorkloadScopeAuthorizationError as exc:
-        _exchange_error("access_denied", str(exc), 403)
-    owner = model.user.get_user(app.config.get("BOOTSTRAP_TOKEN_OWNER"))
-    if owner is None:
-        _exchange_error("server_error", "bootstrap token owner does not exist", 500)
-    application = model.oauth.get_canonical_bootstrap_application(owner)
-    if application is None:
-        application = model.oauth.create_bootstrap_application(
-            model.oauth.get_bootstrap_app_name(), owner
+        _log_workload_identity_exchange(
+            owner=owner,
+            outcome="failure",
+            requested_scope=requested_scope,
+            issuer=issuer,
+            subject=subject,
+            failure_category="authorization",
+            failure_reason=exc.reason,
         )
+        _exchange_error("access_denied", str(exc), 403)
+    if owner is None:
+        _log_workload_identity_exchange(
+            owner=None,
+            outcome="failure",
+            requested_scope=requested_scope,
+            issuer=issuer,
+            subject=subject,
+            effective_scope=effective_scope,
+            failure_category="issuance",
+            failure_reason="token_owner_missing",
+        )
+        _exchange_error("server_error", "bootstrap token owner does not exist", 500)
+    try:
+        application = model.oauth.get_canonical_bootstrap_application(owner)
+        if application is None:
+            application = model.oauth.create_bootstrap_application(
+                model.oauth.get_bootstrap_app_name(), owner
+            )
+    except Exception:
+        _log_workload_identity_exchange(
+            owner=owner,
+            outcome="failure",
+            requested_scope=requested_scope,
+            issuer=issuer,
+            subject=subject,
+            effective_scope=effective_scope,
+            failure_category="issuance",
+            failure_reason="application_creation_failed",
+        )
+        raise
     expiration_seconds = _exchange_expiration_seconds()
-    _, token = create_workload_identity_oauth_token(
-        application,
-        owner,
-        effective_scope,
-        issuer,
-        subject,
-        expiration_seconds=expiration_seconds,
+    try:
+        token_record, token = create_workload_identity_oauth_token(
+            application,
+            owner,
+            effective_scope,
+            issuer,
+            subject,
+            expiration_seconds=expiration_seconds,
+        )
+    except Exception:
+        _log_workload_identity_exchange(
+            owner=owner,
+            outcome="failure",
+            requested_scope=requested_scope,
+            issuer=issuer,
+            subject=subject,
+            effective_scope=effective_scope,
+            failure_category="issuance",
+            failure_reason="token_creation_failed",
+        )
+        raise
+    _log_workload_identity_exchange(
+        owner=owner,
+        outcome="success",
+        requested_scope=requested_scope,
+        effective_scope=effective_scope,
+        issuer=issuer,
+        subject=subject,
+        token_record=token_record,
+        client_id=application.client_id,
     )
     return _exchange_response(
         {
